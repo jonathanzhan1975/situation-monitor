@@ -32,40 +32,57 @@ export const FRED_BASE_URL = 'https://api.stlouisfed.org/fred';
  */
 const isDev = browser ? (import.meta.env?.DEV ?? false) : false;
 
-/**
- * CORS proxy URLs for external API requests
- * Primary: Custom Cloudflare Worker (faster, dedicated)
- * Fallback: corsproxy.io (public, may rate limit)
- */
 export const CORS_PROXIES = {
-	primary: 'https://situation-monitor-proxy.seanthielen-e.workers.dev/?url=',
-	fallback: 'https://corsproxy.io/?url='
+	primary: 'https://corsproxy.io/?url=',
+	secondary: 'https://api.allorigins.win/raw?url=',
+	tertiary: 'https://api.codetabs.com/v1/proxy?quest=',
+	quaternary: 'https://thingproxy.freeboard.io/fetch/'
 } as const;
 
 // Default export for backward compatibility
-export const CORS_PROXY_URL = CORS_PROXIES.fallback;
+export const CORS_PROXY_URL = CORS_PROXIES.primary;
 
-/**
- * Fetch with CORS proxy fallback
- * Tries primary proxy first, falls back to secondary on failure
- */
-export async function fetchWithProxy(url: string): Promise<Response> {
-	const encodedUrl = encodeURIComponent(url);
-
-	// Try primary proxy first
+export async function fetchWithProxy(url: string, retries = 1): Promise<Response> {
+	// Step 1: Try direct fetch with FAST timeout (1.5s)
 	try {
-		const response = await fetch(CORS_PROXIES.primary + encodedUrl);
-		if (response.ok) {
-			return response;
-		}
-		// If we get an error response, try fallback
-		logger.warn('API', `Primary proxy failed (${response.status}), trying fallback`);
-	} catch (error) {
-		logger.warn('API', 'Primary proxy error, trying fallback:', error);
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 1500);
+		const directResponse = await fetch(url, { signal: controller.signal });
+		clearTimeout(timeout);
+		if (directResponse.ok) return directResponse;
+	} catch (e) {
+		// Silent catch for direct fetch, expected to fail for CORS
 	}
 
-	// Fallback to secondary proxy
-	return fetch(CORS_PROXIES.fallback + encodedUrl);
+	const encodedUrl = encodeURIComponent(url);
+	const proxies = Object.values(CORS_PROXIES);
+
+	for (const proxy of proxies) {
+		try {
+			logger.log('Proxy', `Attempting fetch via ${new URL(proxy).hostname} for: ${url.slice(0, 50)}...`);
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 6000); // 6s per proxy
+			const response = await fetch(proxy + encodedUrl, { 
+				signal: controller.signal,
+				headers: { 'Accept': 'application/json, application/xml, text/xml, */*' }
+			});
+			clearTimeout(timeout);
+			
+			if (response.ok) {
+				logger.log('Proxy', `Success using ${new URL(proxy).hostname}`);
+				return response;
+			}
+		} catch (error) {
+			// Try next proxy
+		}
+	}
+
+	if (retries > 0) {
+		logger.warn('Proxy', `All proxies failed for ${url.slice(0, 30)}, retrying...`);
+		return fetchWithProxy(url, retries - 1);
+	}
+
+	throw new Error(`Failed to fetch ${url} after trying all proxies`);
 }
 
 /**

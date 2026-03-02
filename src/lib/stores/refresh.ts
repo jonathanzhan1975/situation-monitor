@@ -64,7 +64,7 @@ export interface RefreshState {
 	initialized: boolean;
 }
 
-const DEFAULT_AUTO_REFRESH_INTERVAL = 60 * 60 * 1000; // 1 hour
+const DEFAULT_AUTO_REFRESH_INTERVAL = 2 * 60 * 1000; // 2 minutes
 const STORAGE_KEY = 'refreshSettings';
 
 // Load settings from localStorage
